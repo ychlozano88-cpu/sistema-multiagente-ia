@@ -107,7 +107,7 @@ Fuentes externas
   +----- FASE 10: Ciclo MLOps (GitHub Actions, 1ro de cada mes) -------+
   |  1. Detecta nueva version OpenDengue (SHA GitHub)                  |
   |  2. Drift PSI sobre features climaticas (NASA POWER)               |
-  |  3. Si hay datos nuevos: reentrena en borrador (sin tocar S3)      |
+  |  3. Si los datos de entrenamiento cambian: reentrena en borrador   |
   |  4. Control de calidad: R2 / Kappa nuevo vs. modelo vigente        |
   |  5. Aprobado: respalda el vigente en historial/ y publica en S3    |
   |     Rechazado: mantiene el vigente y abre un GitHub Issue          |
@@ -281,6 +281,9 @@ Guarda `drift_report.json` con PSI por feature y bandera `alerta_drift`. Si hay 
 > **Nota sobre drift de concepto:** El drift de covariables (features climaticas) es detectable en tiempo casi-real via NASA POWER. El drift de concepto (cambio en la relacion features->incidencia) requiere datos etiquetados de OpenDengue, que se publican con 6–12 meses de latencia — se evalua al momento del reentrenamiento con nueva version del dataset.
 
 Si no existe `data_version.json` (bucket nuevo o primera ejecucion), la version actual se registra como **linea base** y no se reentrena: se asume que los modelos vigentes corresponden a esos datos.
+
+**10b' — ¿Cambiaron los datos de entrenamiento?**
+Una version nueva de OpenDengue no siempre modifica los datos que usa el modelo (8 paises, 2014–2022). Tras el preprocesamiento se compara el hash del dataset de features con el vigente: si es identico, se registra la nueva version **sin reentrenar**.
 
 **10c — Reentrenamiento automatico (en borrador):**
 Si hay nueva version, descarga el dataset y ejecuta el pipeline completo (Agentes 2, 3, 4 y 5) con `S3_SKIP_UPLOAD=1`: los artefactos se generan solo en el runner y **nada llega a produccion todavia**. Tambien se puede forzar desde *Actions → Run workflow → forzar_reentrenamiento* (reentrena con el dataset de features vigente).
@@ -529,6 +532,8 @@ Requisitos: ~1 GB de RAM (PyTorch + XGBoost + SHAP en memoria). La carga inicial
 **Clasificacion de 3 clases** — Fusion de "Normal" y "Vigilancia" en "Endemico" mejora el Kappa de 0.41 (Moderado) a 0.72 (Sustancial). Ambas categorias tienen el mismo protocolo de intervencion clinica.
 
 **Carga en memoria al iniciar** — Al arrancar (lifespan de FastAPI), el backend carga todos los artefactos, desde `data/` del repo o desde S3 si `USE_S3=1`, y los mantiene en RAM. Latencia de inferencia < 200 ms por prediccion.
+
+**Consistencia entrenamiento/inferencia (`features_version`)** — `metrics.json` registra con que definicion de features se entreno el modelo. El Agente 5 la lee al arrancar y calcula `tendencia_1m`/`tendencia_3m` con la misma formula que se uso en el entrenamiento (v1: doble `log1p`, modelos anteriores; v2: diferencia de lags ya en `log1p`, Agente 2 actual). Asi un modelo nunca recibe en produccion features calculadas distinto a como las aprendio.
 
 **Drift de covariables vs. concepto** — El drift de covariables (features climaticas) se monitorea mensualmente via NASA POWER con PSI. El drift de concepto requiere datos etiquetados de OpenDengue (latencia 6–12 meses) y se evalua en cada reentrenamiento cuando hay nueva version del dataset.
 

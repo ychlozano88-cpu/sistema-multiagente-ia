@@ -83,10 +83,8 @@ def _build_sequences(df_sorted, features, seq_len):
 class AgentePrediccionDL:
     def __init__(self, base_dir=None):
         if base_dir is None:
-            if os.path.exists("/app"):
-                self.base_dir = "/app"
-            else:
-                self.base_dir = r"c:\Users\yeshu\Documents\Inteligencia Artificial\Proyecto Final"
+            # Raíz del repositorio (funciona en local, Docker /app y GitHub Actions)
+            self.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # raíz del repositorio
         else:
             self.base_dir = base_dir
 

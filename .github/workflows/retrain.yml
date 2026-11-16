@@ -65,6 +65,8 @@ jobs:
               except Exception as e:
                   print(f'Aviso: no se pudo descargar {key}: {e}')
           EOF
+          # Copia del dataset de entrenamiento vigente para detectar si los datos cambian
+          [ -f data/processed/dataset_features_latam.csv ] && cp data/processed/dataset_features_latam.csv data/processed/features_vigente.csv || true
 
       - name: Verificar nueva versión OpenDengue + drift climático
         id: check
@@ -83,11 +85,6 @@ jobs:
           else
             echo "drift_alto=false" >> $GITHUB_OUTPUT
           fi
-          if grep -q "Nueva versión detectada" check_output.txt || [ "${{ inputs.forzar_reentrenamiento }}" == "true" ]; then
-            echo "reentrenar=true" >> $GITHUB_OUTPUT
-          else
-            echo "reentrenar=false" >> $GITHUB_OUTPUT
-          fi
 
       - name: Preprocesar dataset nuevo (Agente 2, en borrador)
         if: steps.check.outputs.nueva_version == 'true'
@@ -95,8 +92,28 @@ jobs:
           S3_SKIP_UPLOAD: "1"
         run: python agents/agente_2_preprocesamiento.py
 
+      - name: Decidir si reentrenar (¿cambiaron los datos de entrenamiento?)
+        id: decidir
+        run: |
+          CAMBIARON=false
+          if [ "${{ steps.check.outputs.nueva_version }}" == "true" ]; then
+            if [ -f data/processed/features_vigente.csv ] && \
+               [ "$(md5sum < data/processed/features_vigente.csv)" == "$(md5sum < data/processed/dataset_features_latam.csv)" ]; then
+              echo "Nueva versión de OpenDengue, pero el dataset de entrenamiento es idéntico al vigente."
+            else
+              CAMBIARON=true
+              echo "El dataset de entrenamiento cambió respecto al vigente."
+            fi
+          fi
+          echo "datos_cambiaron=$CAMBIARON" >> $GITHUB_OUTPUT
+          if [ "$CAMBIARON" == "true" ] || [ "${{ inputs.forzar_reentrenamiento }}" == "true" ]; then
+            echo "reentrenar=true" >> $GITHUB_OUTPUT
+          else
+            echo "reentrenar=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Reentrenar modelos (Agentes 3, 4, 5, en borrador)
-        if: steps.check.outputs.reentrenar == 'true'
+        if: steps.decidir.outputs.reentrenar == 'true'
         env:
           S3_SKIP_UPLOAD: "1"   # nada se publica hasta pasar el control de calidad
         run: |
@@ -106,7 +123,7 @@ jobs:
 
       - name: Control de calidad (nuevo vs vigente)
         id: qa
-        if: steps.check.outputs.reentrenar == 'true'
+        if: steps.decidir.outputs.reentrenar == 'true'
         run: |
           set +e
           python scripts/pipeline/validar_modelo.py \
@@ -128,7 +145,7 @@ jobs:
         if: steps.qa.outputs.aprobado == 'true'
         run: |
           aws s3 sync data/models/ "s3://$S3_BUCKET/modelos/" --exclude "metrics_vigente.json"
-          if [ "${{ steps.check.outputs.nueva_version }}" == "true" ]; then
+          if [ "${{ steps.decidir.outputs.datos_cambiaron }}" == "true" ]; then
             aws s3 cp data/processed/dataset_maestro_mensual_latam.csv "s3://$S3_BUCKET/datos_procesados/"
             aws s3 cp data/processed/dataset_features_latam.csv        "s3://$S3_BUCKET/datos_procesados/"
           fi
@@ -150,10 +167,12 @@ jobs:
           done
           if [ "${{ steps.qa.outputs.aprobado }}" == "true" ]; then
             git add data/models
-            if [ "${{ steps.check.outputs.nueva_version }}" == "true" ]; then
+            if [ "${{ steps.decidir.outputs.datos_cambiaron }}" == "true" ]; then
               git add data/processed/dataset_maestro_mensual_latam.csv data/processed/dataset_features_latam.csv
             fi
             MSG="mlops: publicar modelo reentrenado (R² ensamble $(python -c "import json;print(json.load(open('data/models/metrics.json'))['r2_ensemble'])"))"
+          elif [ "${{ steps.check.outputs.nueva_version }}" == "true" ]; then
+            MSG="mlops: registrar nueva versión de OpenDengue (sin cambios en los datos de entrenamiento)"
           else
             MSG="mlops: verificación mensual (drift y versión de datos)"
           fi
@@ -166,7 +185,7 @@ jobs:
           git push origin HEAD:main
 
       - name: Crear issue si el modelo reentrenado fue rechazado
-        if: steps.check.outputs.reentrenar == 'true' && steps.qa.outputs.aprobado != 'true'
+        if: steps.decidir.outputs.reentrenar == 'true' && steps.qa.outputs.aprobado != 'true'
         uses: actions/github-script@v7
         env:
           MOTIVOS: ${{ steps.qa.outputs.motivos }}
@@ -193,6 +212,19 @@ jobs:
               labels: ['drift', 'model-monitoring']
             })
 
+      - name: Crear issue si el ciclo falló
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              title: 'Falla en el ciclo MLOps (verificación / reentrenamiento)',
+              body:  `Un paso del workflow falló. No se publicó ningún modelo: producción sigue con el modelo vigente.\n\nRun: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              labels: ['model-monitoring']
+            })
+
       - name: Resumen del resultado
         if: always()
         run: |
@@ -201,10 +233,13 @@ jobs:
             echo ""
             if [ "${{ steps.check.outputs.nueva_version }}" == "true" ]; then
               echo "🆕 Nueva versión de OpenDengue detectada"
+              if [ "${{ steps.decidir.outputs.datos_cambiaron }}" != "true" ]; then
+                echo "🟰 Los datos de entrenamiento no cambiaron — se registra la versión sin reentrenar"
+              fi
             else
               echo "ℹ️ Sin nueva versión de OpenDengue"
             fi
-            if [ "${{ steps.check.outputs.reentrenar }}" == "true" ]; then
+            if [ "${{ steps.decidir.outputs.reentrenar }}" == "true" ]; then
               if [ "${{ steps.qa.outputs.aprobado }}" == "true" ]; then
                 echo "✅ Modelo reentrenado **aprobado y publicado** (respaldo anterior: historial/${{ steps.respaldo.outputs.ts }})"
               else

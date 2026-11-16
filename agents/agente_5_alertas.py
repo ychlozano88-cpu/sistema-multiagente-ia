@@ -73,6 +73,11 @@ class AgenteOrquestador:
         # Pesos base del ensemble: cargados desde metrics.json si están disponibles
         self._w_xgb  = float((metrics or {}).get("ensemble_w_xgb",  0.5))
         self._w_lstm = float((metrics or {}).get("ensemble_w_lstm", 0.5))
+        # Versión de la definición de features con la que se entrenó el modelo cargado.
+        #   1 (modelos antiguos, sin el campo): tendencia_1m/3m con doble log1p.
+        #   2: tendencia_1m/3m = diferencia de lags ya en log1p (igual que el Agente 2 actual).
+        # Así inferencia y entrenamiento usan siempre la misma fórmula (sin training/serving skew).
+        self.features_version = int((metrics or {}).get("features_version", 1))
 
         # Agente 6: Detección de Régimen Epidémico — cargado por ruta para evitar problemas de sys.path
         _here = os.path.dirname(os.path.abspath(__file__))
@@ -124,6 +129,12 @@ class AgenteOrquestador:
     # FASE 7b — EVALUACIÓN FINAL: CONSOLIDACIÓN DE MÉTRICAS
     # (post Agente 3 + Agente 4, cada uno ya evaluado por separado)
     # ─────────────────────────────────────────────────────────────
+
+    def _tendencia(self, lag_reciente, lag_anterior):
+        """Tendencia entre dos lags que ya están en escala log1p (ver features_version)."""
+        if self.features_version >= 2:
+            return lag_reciente - lag_anterior
+        return np.log1p(lag_reciente) - np.log1p(lag_anterior)
 
     @staticmethod
     def generar_metricas_finales(metricas_ml, metricas_dl, base_dir):
@@ -261,6 +272,7 @@ class AgenteOrquestador:
             "n_test":  int(metricas_ml.get("n_test", 0)),
             "n_paises": int(df['pais'].nunique()),
             "n_departamentos": int(df['adm_1_name'].nunique()),
+            "features_version": 2,
             "r2_xgb":   metricas_ml.get("r2_xgb", 0.0),
             "mae_xgb":  metricas_ml.get("mae_xgb", 0.0),
             "rmse_xgb": metricas_ml.get("rmse_xgb", 0.0),
@@ -448,11 +460,11 @@ class AgenteOrquestador:
             elif feat == "tendencia_1m":
                 l1 = lag_cache.get("incidencia_lag1", 0.0)
                 l2 = lag_cache.get("incidencia_lag2", 0.0)
-                vector.append(np.log1p(l1) - np.log1p(l2))
+                vector.append(self._tendencia(l1, l2))
             elif feat == "tendencia_3m":
                 l1 = lag_cache.get("incidencia_lag1", 0.0)
                 l3 = lag_cache.get("incidencia_lag3", 0.0)
-                vector.append(np.log1p(l1) - np.log1p(l3))
+                vector.append(self._tendencia(l1, l3))
             elif feat == "fase_ascendente":
                 l1 = lag_cache.get("incidencia_lag1", 0.0)
                 l3 = lag_cache.get("incidencia_lag3", 0.0)

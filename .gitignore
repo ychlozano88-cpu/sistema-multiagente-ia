@@ -7,6 +7,7 @@ data/raw/Temporal_extract_V1_3.csv
 
 # Copia temporal de las metricas del modelo en produccion (control de calidad del workflow)
 data/models/metrics_vigente.json
+data/processed/features_vigente.csv
 
 # Notebooks y outputs (solo desarrollo local)
 notebooks/

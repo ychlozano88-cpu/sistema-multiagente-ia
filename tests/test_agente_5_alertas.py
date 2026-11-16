@@ -161,3 +161,22 @@ def test_no_sube_nada_a_s3_real(dataset_sintetico, monkeypatch):
     a5.AgenteOrquestador.generar_metricas_finales(metricas_ml, metricas_dl, base_dir)
 
     assert llamadas == ["modelos/metrics.json"]
+
+
+# ── Consistencia entrenamiento/inferencia de tendencia_1m/3m (features_version) ──
+
+def _orq_con_version(v):
+    from agente_5_alertas import AgenteOrquestador
+    o = AgenteOrquestador.__new__(AgenteOrquestador)
+    o.features_version = v
+    return o
+
+
+def test_tendencia_version1_reproduce_dataset_antiguo():
+    # Fila real ARG / BUENOS AIRES 2019: lag1=0.045833 (log1p), lag2=0 -> dataset antiguo 0.044814
+    assert abs(_orq_con_version(1)._tendencia(0.045833, 0.0) - 0.044814) < 1e-5
+
+
+def test_tendencia_version2_reproduce_agente2_actual():
+    # Agente 2 actual: lag1 - lag2 (ya en log1p) -> 0.045833
+    assert abs(_orq_con_version(2)._tendencia(0.045833, 0.0) - 0.045833) < 1e-9
