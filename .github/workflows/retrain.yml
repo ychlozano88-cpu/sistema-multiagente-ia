@@ -216,39 +216,60 @@ jobs:
           MOTIVOS: ${{ steps.qa.outputs.motivos }}
         with:
           script: |
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo:  context.repo.repo,
-              title: 'Modelo reentrenado rechazado por el control de calidad',
-              body:  `El reentrenamiento terminó pero el modelo nuevo **no se publicó**; producción sigue con el modelo vigente.\n\nMotivos: ${process.env.MOTIVOS || 'ver el resumen del workflow'}\n\nRun: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-              labels: ['model-monitoring']
-            })
+            const crearOComentar = async (title, body, labels) => {
+              const abiertos = await github.paginate(github.rest.issues.listForRepo,
+                { owner: context.repo.owner, repo: context.repo.repo, state: 'open' });
+              const previo = abiertos.find(i => i.title === title && !i.pull_request);
+              if (previo) {
+                await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: previo.number, body: `Se repite en ${new Date().toISOString().slice(0,10)}.\n\n${body}` });
+              } else {
+                await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body, labels });
+              }
+            };
+            await crearOComentar('Modelo reentrenado rechazado por el control de calidad',
+              `El reentrenamiento terminó pero el modelo nuevo **no se publicó**; producción sigue con el modelo vigente.\n\nMotivos: ${process.env.MOTIVOS || 'ver el resumen del workflow'}\n\nRun: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              ['model-monitoring'])
 
       - name: Crear issue si hay drift alto sin nueva versión
         if: ${{ !cancelled() && steps.check.outputs.drift_alto == 'true' && steps.check.outputs.nueva_version == 'false' }}
         uses: actions/github-script@v7
         with:
           script: |
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo:  context.repo.repo,
-              title: 'Drift climatico detectado - revisar cuando llegue nueva version OpenDengue',
-              body:  '**Drift alto detectado** en features climaticas (PSI >= 0.2).\n\nEl dataset de OpenDengue no tiene nueva version aun, por lo que el reentrenamiento automatico no aplica.\nCuando OpenDengue publique nuevos datos, el drift de concepto podra evaluarse.\n\nVer `data/models/drift_report.json` para detalles.',
-              labels: ['drift', 'model-monitoring']
-            })
+            const crearOComentar = async (title, body, labels) => {
+              const abiertos = await github.paginate(github.rest.issues.listForRepo,
+                { owner: context.repo.owner, repo: context.repo.repo, state: 'open' });
+              const previo = abiertos.find(i => i.title === title && !i.pull_request);
+              if (previo) {
+                await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: previo.number, body: `Se repite en ${new Date().toISOString().slice(0,10)}.\n\n${body}` });
+              } else {
+                await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body, labels });
+              }
+            };
+            await crearOComentar('Drift climatico detectado - revisar cuando llegue nueva version OpenDengue',
+              '**Drift alto detectado** en features climaticas (PSI >= 0.2).\n\nEl dataset de OpenDengue no tiene nueva version aun, por lo que el reentrenamiento automatico no aplica.\nCuando OpenDengue publique nuevos datos, el drift de concepto podra evaluarse.\n\nVer `data/models/drift_report.json` para detalles.',
+              ['drift', 'model-monitoring'])
 
       - name: Crear issue si el ciclo falló
         if: failure()
         uses: actions/github-script@v7
         with:
           script: |
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo:  context.repo.repo,
-              title: 'Falla en el ciclo MLOps (verificación / reentrenamiento)',
-              body:  `Un paso del workflow falló. No se publicó ningún modelo: producción sigue con el modelo vigente.\n\nRun: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-              labels: ['model-monitoring']
-            })
+            const crearOComentar = async (title, body, labels) => {
+              const abiertos = await github.paginate(github.rest.issues.listForRepo,
+                { owner: context.repo.owner, repo: context.repo.repo, state: 'open' });
+              const previo = abiertos.find(i => i.title === title && !i.pull_request);
+              if (previo) {
+                await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: previo.number, body: `Se repite en ${new Date().toISOString().slice(0,10)}.\n\n${body}` });
+              } else {
+                await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body, labels });
+              }
+            };
+            await crearOComentar('Falla en el ciclo MLOps (verificación / reentrenamiento)',
+              `Un paso del workflow falló. No se publicó ningún modelo: producción sigue con el modelo vigente.\n\nRun: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              ['model-monitoring'])
 
       - name: Resumen del resultado
         if: always()
