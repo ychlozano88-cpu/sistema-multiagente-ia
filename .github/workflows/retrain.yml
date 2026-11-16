@@ -1,8 +1,9 @@
 name: Verificación y Reentrenamiento Automático
 
 on:
-  schedule:
-    - cron: '0 8 1 * *'   # 1ro de cada mes a las 8 UTC
+  # Desactivado: requiere credenciales AWS S3. Reactivar si se vuelve a usar S3.
+  # schedule:
+  #   - cron: '0 8 1 * *'   # 1ro de cada mes a las 8 UTC
   workflow_dispatch:        # también ejecutable manualmente desde GitHub
 
 jobs:

@@ -35,7 +35,9 @@ app.add_middleware(
         "https://proyecto-ia-eight.vercel.app",
         "http://localhost:5173",
         "http://localhost:4173",
-    ],
+    ] + [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()],
+    # Acepta cualquier despliegue de Vercel (*.vercel.app)
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

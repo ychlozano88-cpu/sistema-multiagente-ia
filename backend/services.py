@@ -48,18 +48,16 @@ class PredictionService:
     """
 
     def __init__(self, base_dir=None):
-        # En producción (Railway) descargamos todo de S3 a /tmp para evitar rutas con espacios
-        if os.environ.get("RAILWAY_ENVIRONMENT"):
-            _tmp           = "/tmp/sma_data"
-            self.base_dir  = _tmp
-            self.model_dir     = os.path.join(_tmp, "models")
-            self.processed_dir = os.path.join(_tmp, "processed")
-            self.raw_dir       = os.path.join(_tmp, "raw")
+        # Por defecto se usan los modelos y datos incluidos en el repo (data/).
+        # Si hay credenciales AWS (USE_S3=1), se descargan los modelos más recientes desde S3 a /tmp.
+        self.usar_s3 = os.environ.get("USE_S3", "").lower() in ("1", "true", "yes")
+        if self.usar_s3:
+            self.base_dir = "/tmp/sma_data"
+            self.model_dir     = os.path.join(self.base_dir, "models")
+            self.processed_dir = os.path.join(self.base_dir, "processed")
+            self.raw_dir       = os.path.join(self.base_dir, "raw")
         else:
-            if base_dir is None:
-                self.base_dir = r"c:\Users\yeshu\Documents\Inteligencia Artificial\Proyecto Final"
-            else:
-                self.base_dir = base_dir
+            self.base_dir = base_dir or _root
             self.model_dir     = os.path.join(self.base_dir, "data", "models")
             self.processed_dir = os.path.join(self.base_dir, "data", "processed")
             self.raw_dir       = os.path.join(self.base_dir, "data", "raw")
@@ -134,7 +132,10 @@ class PredictionService:
 
     def inicializar_servicio(self):
         print("[SMA-ML/DL] Iniciando Sistema Multi-Agente...")
-        self._descargar_desde_s3()
+        if self.usar_s3:
+            self._descargar_desde_s3()
+        else:
+            print(f"[SMA-ML/DL] Usando modelos locales en {self.model_dir}")
 
         # Dataset maestro
         master_path = os.path.join(self.processed_dir, "dataset_maestro_mensual_latam.csv")

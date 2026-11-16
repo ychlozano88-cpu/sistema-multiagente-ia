@@ -15,7 +15,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend /app/backend
 COPY agents /app/agents
+# Modelos y datos incluidos en el repo (ya no se necesita S3)
+COPY data /app/data
 
-EXPOSE 8080
+ENV PORT=7860
+EXPOSE 7860
 
 CMD uvicorn backend.main:app --host 0.0.0.0 --port $PORT
