@@ -1,0 +1,25 @@
+{
+  "verificado_en": "2026-11-16T17:21:50.517631+00:00",
+  "estado": "calculado",
+  "features": {
+    "tmax_promedio": {
+      "psi": 0.1675,
+      "nivel": "moderado"
+    },
+    "tmin_promedio": {
+      "psi": 0.3676,
+      "nivel": "alto"
+    },
+    "precipitacion": {
+      "psi": 0.0736,
+      "nivel": "estable"
+    },
+    "humedad_promedio": {
+      "psi": 0.0357,
+      "nivel": "estable"
+    }
+  },
+  "psi_max": 0.3676,
+  "alerta_drift": true,
+  "nota": "Drift detectado en features de entrada (covariable shift). El drift de concepto no puede evaluarse hasta disponer de nuevos datos etiquetados de OpenDengue."
+}
