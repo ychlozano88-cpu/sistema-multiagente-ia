@@ -11,9 +11,9 @@ Facultad de Ingenieria de Sistemas e Informatica
 
 | Capa | URL |
 |---|---|
-| Frontend (Vercel) | https://proyecto-ia-eight.vercel.app |
-| Backend API (Railway) | https://proyecto-ia-production.up.railway.app |
-| Documentacion interactiva (Swagger) | https://proyecto-ia-production.up.railway.app/docs |
+| Frontend (Vercel) | https://sistema-multiagente-ia.vercel.app |
+| Backend API (Railway) | https://web-production-55a1ada1.up.railway.app |
+| Documentacion interactiva (Swagger) | https://web-production-55a1ada1.up.railway.app/docs |
 
 ---
 
@@ -71,7 +71,7 @@ Fuentes externas
   OpenDengue · NASA POWER · Banco Mundial · JMP OMS/UNICEF
         |
         v
-  AWS S3 (epipredict-dengue)
+  AWS S3 (bucket configurable: S3_BUCKET)
   datos_crudos/ · datos_procesados/ · modelos/
         |
         v
@@ -312,10 +312,10 @@ Si hay nueva version: descarga dataset, ejecuta pipeline completo (Agentes 2, 3,
 | Frontend | React 19 · Vite · TailwindCSS · Leaflet.js · Material Symbols |
 | Visualizacion | SVG puro — ScatterPlot 4,056 puntos sin librerias externas |
 | PDF | jsPDF + jspdf-autotable — reporte tecnico exportable |
-| Storage | AWS S3 (`epipredict-dengue`) via boto3 |
-| Deploy backend | Railway (Docker `python:3.11-slim`) |
+| Storage | AWS S3 via boto3 (bucket configurable con `S3_BUCKET`, opcional con `USE_S3=1`) |
+| Deploy backend | Railway (Python 3.11, arranque `python -m backend.main`) |
 | Deploy frontend | Vercel |
-| CI/CD | GitHub Actions — cron mensual (drift + reentrenamiento automatico) |
+| CI/CD | GitHub Actions — tests en cada push, cron mensual (drift + reentrenamiento) y carga manual a S3 |
 
 ---
 
@@ -333,7 +333,7 @@ Si hay nueva version: descarga dataset, ejecuta pipeline completo (Agentes 2, 3,
 │   └── s3_client.py                     # Cliente S3 (upload/download/ensure_local)
 ├── backend/
 │   ├── main.py                          # FastAPI — todos los endpoints REST
-│   ├── services.py                      # PredictionService — carga S3, orquesta agentes
+│   ├── services.py                      # PredictionService — carga modelos (repo o S3), orquesta agentes
 │   └── schemas.py                       # Modelos Pydantic
 ├── frontend/
 │   ├── public/favicon.svg               # Icono mosquito SVG
@@ -361,9 +361,11 @@ Si hay nueva version: descarga dataset, ejecuta pipeline completo (Agentes 2, 3,
 │       └── generar_scatter_data.py      # Genera scatter_data.json para el frontend
 ├── .github/
 │   └── workflows/
-│       └── retrain.yml                  # GitHub Actions: cron mensual automatico
-├── Dockerfile                           # python:3.11-slim
-├── Procfile                             # uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+│       ├── ci.yml                       # Tests (pytest) en cada push
+│       ├── retrain.yml                  # Cron mensual: drift + reentrenamiento -> S3
+│       └── subir-datos-s3.yml           # Manual: sincroniza data/ del repo con S3
+├── Dockerfile                           # python:3.11-slim (incluye data/)
+├── Procfile                             # python -m backend.main (lee PORT del entorno)
 └── requirements.txt
 ```
 
@@ -394,7 +396,7 @@ Documentacion interactiva en `/docs` (Swagger UI).
 ## Estructura S3
 
 ```
-s3://epipredict-dengue/
+s3://<S3_BUCKET>/
 ├── datos_crudos/
 │   ├── Temporal_extract_V1_3.csv        # Dataset OpenDengue V1.3
 │   ├── clima_nasa_crudo.csv
@@ -421,16 +423,74 @@ s3://epipredict-dengue/
 
 ## Variables de entorno
 
+### Backend (Railway)
+
+| Variable | Requerida | Descripcion |
+|---|---|---|
+| `USE_S3` | No | `1` para descargar modelos y datos desde S3 al arrancar. Sin ella, el backend usa los artefactos versionados en `data/` del repo |
+| `S3_BUCKET` | Con `USE_S3=1` | Nombre del bucket (ej. `epipredict-dengue-ych`) |
+| `AWS_ACCESS_KEY_ID` | Con `USE_S3=1` | Clave de acceso de un usuario IAM con permisos solo sobre el bucket |
+| `AWS_SECRET_ACCESS_KEY` | Con `USE_S3=1` | Clave secreta de ese usuario |
+| `AWS_DEFAULT_REGION` | Con `USE_S3=1` | Region del bucket (`us-east-2`) |
+| `PORT` | No | Puerto del servidor (por defecto `7860`; Railway puede inyectarlo) |
+| `ALLOWED_ORIGINS` | No | Origenes CORS extra separados por coma. Los dominios `*.vercel.app` y `localhost` ya estan permitidos |
+
+### Frontend (Vercel)
+
 | Variable | Descripcion |
 |---|---|
-| `AWS_ACCESS_KEY_ID` | Clave de acceso AWS |
-| `AWS_SECRET_ACCESS_KEY` | Clave secreta AWS |
-| `AWS_DEFAULT_REGION` | Region del bucket (`us-east-2`) |
-| `RAILWAY_ENVIRONMENT` | Inyectada por Railway — activa rutas `/tmp/sma_data/` |
-| `PORT` | Puerto del servidor (Railway lo inyecta automaticamente) |
-| `VITE_API_URL` | URL del backend para Vite (`.env.production`) |
+| `VITE_API_URL` | URL del backend. Definida en `frontend/.env.production`; una variable de entorno en Vercel la sobrescribe |
 
-Para el workflow de GitHub Actions, `AWS_ACCESS_KEY_ID` y `AWS_SECRET_ACCESS_KEY` se configuran en **Settings → Secrets and variables → Actions** del repositorio.
+### GitHub Actions (Settings → Secrets and variables → Actions)
+
+| Secret | Descripcion |
+|---|---|
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Credenciales del usuario IAM del bucket |
+| `S3_BUCKET` | Nombre del bucket |
+
+Politica IAM minima para el usuario de la aplicacion:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Effect": "Allow", "Action": "s3:ListBucket", "Resource": "arn:aws:s3:::<S3_BUCKET>" },
+    { "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"], "Resource": "arn:aws:s3:::<S3_BUCKET>/*" }
+  ]
+}
+```
+
+---
+
+## Despliegue
+
+### Ejecucion local
+
+```bash
+pip install -r requirements.txt
+python -m backend.main               # API en http://localhost:7860 (usa data/ del repo)
+
+cd frontend && npm install
+VITE_API_URL=http://localhost:7860 npm run dev
+```
+
+### Backend en Railway
+
+1. *New Project → Deploy from GitHub repo* y elegir este repositorio (Railway detecta Python por `requirements.txt` y arranca con el `Procfile`: `python -m backend.main`).
+2. *Settings → Networking → Generate Domain* apuntando al puerto `7860` (o definir `PORT`).
+3. Opcional: agregar las variables de S3 de la tabla anterior y `USE_S3=1`.
+
+Requisitos: ~1 GB de RAM (PyTorch + XGBoost + SHAP en memoria). La carga inicial de modelos tarda 1–2 minutos.
+
+### Frontend en Vercel
+
+*Add New → Project*, importar el repositorio con **Root Directory = `frontend`** (preset Vite). Cada push a `main` redespliega automaticamente.
+
+### Bucket S3 (opcional)
+
+1. Crear el bucket en `us-east-2` y un usuario IAM con la politica minima de arriba.
+2. Cargar los secrets en GitHub y ejecutar **Actions → "Subir modelos y datos del repo a S3" → Run workflow**: sincroniza `data/models`, `data/processed` y `data/raw` con los prefijos `modelos/`, `datos_procesados/` y `datos_crudos/`.
+3. Agregar `USE_S3=1` y las credenciales en Railway. En los logs debe aparecer `Descargando modelos actualizados desde S3...`.
 
 ---
 
@@ -446,7 +506,7 @@ Para el workflow de GitHub Actions, `AWS_ACCESS_KEY_ID` y `AWS_SECRET_ACCESS_KEY
 
 **Clasificacion de 3 clases** — Fusion de "Normal" y "Vigilancia" en "Endemico" mejora el Kappa de 0.41 (Moderado) a 0.72 (Sustancial). Ambas categorias tienen el mismo protocolo de intervencion clinica.
 
-**Carga en memoria al iniciar** — El backend descarga todos los artefactos desde S3 al arrancar (startup event) y los mantiene en RAM. Latencia de inferencia < 200 ms por prediccion.
+**Carga en memoria al iniciar** — Al arrancar (lifespan de FastAPI), el backend carga todos los artefactos, desde `data/` del repo o desde S3 si `USE_S3=1`, y los mantiene en RAM. Latencia de inferencia < 200 ms por prediccion.
 
 **Drift de covariables vs. concepto** — El drift de covariables (features climaticas) se monitorea mensualmente via NASA POWER con PSI. El drift de concepto requiere datos etiquetados de OpenDengue (latencia 6–12 meses) y se evalua en cada reentrenamiento cuando hay nueva version del dataset.
 
