@@ -1,9 +1,8 @@
 name: Verificación y Reentrenamiento Automático
 
 on:
-  # Desactivado: requiere credenciales AWS S3. Reactivar si se vuelve a usar S3.
-  # schedule:
-  #   - cron: '0 8 1 * *'   # 1ro de cada mes a las 8 UTC
+  schedule:
+    - cron: '0 8 1 * *'   # 1ro de cada mes a las 8 UTC
   workflow_dispatch:        # también ejecutable manualmente desde GitHub
 
 jobs:
@@ -32,6 +31,7 @@ jobs:
           AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION:    us-east-2
+          S3_BUCKET:             ${{ secrets.S3_BUCKET }}
         run: |
           python -c "
           import sys, os
@@ -63,6 +63,7 @@ jobs:
           AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION:    us-east-2
+          S3_BUCKET:             ${{ secrets.S3_BUCKET }}
         run: |
           set -o pipefail
           python scripts/pipeline/verificar_actualizacion.py 2>&1 | tee check_output.txt
@@ -85,6 +86,7 @@ jobs:
           AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION:    us-east-2
+          S3_BUCKET:             ${{ secrets.S3_BUCKET }}
         run: |
           echo "Nueva versión de OpenDengue detectada — iniciando pipeline completo..."
           python agents/agente_2_preprocesamiento.py
@@ -96,6 +98,7 @@ jobs:
           AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION:    us-east-2
+          S3_BUCKET:             ${{ secrets.S3_BUCKET }}
         run: |
           python -c "
           import sys, os
@@ -119,6 +122,7 @@ jobs:
           AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION:    us-east-2
+          S3_BUCKET:             ${{ secrets.S3_BUCKET }}
         run: |
           python -c "
           import sys, os

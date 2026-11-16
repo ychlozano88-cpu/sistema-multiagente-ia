@@ -1,0 +1,30 @@
+name: Subir modelos y datos del repo a S3
+
+# Carga inicial (o resincronización) del bucket S3 con los artefactos versionados en el repo.
+# Ejecutar manualmente desde la pestaña Actions -> "Subir modelos y datos del repo a S3" -> Run workflow.
+on:
+  workflow_dispatch:
+
+jobs:
+  subir:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Subir a S3
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION:    us-east-2
+          S3_BUCKET:             ${{ secrets.S3_BUCKET }}
+        run: |
+          set -e
+          test -n "$S3_BUCKET" || { echo "Falta el secret S3_BUCKET"; exit 1; }
+          # Prefijos que espera agents/s3_client.py
+          aws s3 sync data/models/    "s3://$S3_BUCKET/modelos/"
+          aws s3 sync data/processed/ "s3://$S3_BUCKET/datos_procesados/"
+          aws s3 sync data/raw/       "s3://$S3_BUCKET/datos_crudos/"
+          echo "### Contenido del bucket" >> $GITHUB_STEP_SUMMARY
+          aws s3 ls "s3://$S3_BUCKET/" --recursive --summarize | tail -3 >> $GITHUB_STEP_SUMMARY

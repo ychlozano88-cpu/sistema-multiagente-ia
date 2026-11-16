@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 Utilidades S3 compartidas por todos los agentes del SMA-ML/DL.
-Bucket: epipredict-dengue
+Bucket: configurable con la variable de entorno S3_BUCKET (por defecto epipredict-dengue)
 """
 
 import os
 import boto3
 from botocore.exceptions import ClientError
 
-BUCKET            = "epipredict-dengue"
+BUCKET            = os.environ.get("S3_BUCKET", "epipredict-dengue")
 PREFIX_CRUDOS     = "datos_crudos/"
 PREFIX_PROCESADOS = "datos_procesados/"
 PREFIX_MODELOS    = "modelos/"
