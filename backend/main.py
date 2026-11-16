@@ -228,3 +228,9 @@ def get_drift_status():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
+
+
+if __name__ == "__main__":
+    # Arranque independiente del shell: lee PORT del entorno (Railway, Docker, local)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "7860")))
