@@ -33,6 +33,11 @@ def download(s3_key: str, local_path: str) -> None:
 
 
 def upload(local_path: str, s3_key: str) -> None:
+    # Modo borrador (S3_SKIP_UPLOAD=1): el reentrenamiento genera artefactos solo en local;
+    # el workflow los publica en S3 únicamente si superan el control de calidad.
+    if os.environ.get("S3_SKIP_UPLOAD", "").lower() in ("1", "true", "yes"):
+        print(f"   [S3↑ omitido: modo borrador] {s3_key}")
+        return
     _client().upload_file(local_path, BUCKET, s3_key)
     print(f"   [S3↑] {s3_key}")
 

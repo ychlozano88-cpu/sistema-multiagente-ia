@@ -123,6 +123,14 @@ def hay_nueva_version():
     sha_guardado = sha_local()
     print(f"   [Versión] SHA remoto : {sha_remoto}  ({fecha})")
     print(f"   [Versión] SHA guardado: {sha_guardado or 'ninguno'}")
+    if sha_guardado is None:
+        # Sin registro previo (bucket nuevo o primera ejecución): los modelos vigentes se
+        # consideran entrenados con la versión actual. Se registra como línea base en vez
+        # de disparar un reentrenamiento falso.
+        md5 = md5_archivo(DENGUE_LOCAL) if os.path.exists(DENGUE_LOCAL) else None
+        guardar_version(sha_remoto, fecha, md5)
+        print("   [Versión] Línea base registrada — sin reentrenamiento en esta ejecución.")
+        return False, sha_remoto, fecha
     nueva = sha_remoto != sha_guardado
     return nueva, sha_remoto, fecha
 

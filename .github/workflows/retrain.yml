@@ -1,17 +1,35 @@
 name: Verificación y Reentrenamiento Automático
 
+# FASE 10 — Ciclo MLOps completo:
+#   detectar datos nuevos -> drift -> reentrenar (en borrador) -> control de calidad
+#   -> respaldar modelo vigente -> publicar en S3 -> registrar en git -> redespliegue en Railway
 on:
   schedule:
     - cron: '0 8 1 * *'   # 1ro de cada mes a las 8 UTC
-  workflow_dispatch:        # también ejecutable manualmente desde GitHub
+  workflow_dispatch:
+    inputs:
+      forzar_reentrenamiento:
+        description: "Reentrenar aunque no haya nueva versión de OpenDengue (usa el dataset de features vigente)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: reentrenamiento
+  cancel-in-progress: false
 
 jobs:
   verificar-y-reentrenar:
     runs-on: ubuntu-latest
     timeout-minutes: 180    # LSTM puede tardar hasta 60 min
     permissions:
-      contents: read
-      issues: write          # necesario para crear issues de alerta de drift
+      contents: write        # registrar artefactos en el repo (dispara el redespliegue)
+      issues: write          # issues de alerta (drift / modelo rechazado)
+
+    env:
+      AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION:    us-east-2
+      S3_BUCKET:             ${{ secrets.S3_BUCKET }}
 
     steps:
       - name: Checkout del repositorio
@@ -26,141 +44,141 @@ jobs:
       - name: Instalar dependencias
         run: pip install -r requirements.txt
 
-      - name: Descargar datos necesarios desde S3
-        env:
-          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION:    us-east-2
-          S3_BUCKET:             ${{ secrets.S3_BUCKET }}
+      - name: Descargar estado vigente desde S3
         run: |
-          python -c "
+          python - <<'EOF'
           import sys, os
           sys.path.insert(0, 'agents')
           import s3_client as s3
-
-          # Features procesadas (necesarias para calcular distribución de referencia del drift)
-          os.makedirs('data/processed', exist_ok=True)
-          os.makedirs('data/raw', exist_ok=True)
-          os.makedirs('data/models', exist_ok=True)
-
+          for d in ('data/processed', 'data/raw', 'data/models'):
+              os.makedirs(d, exist_ok=True)
           archivos = [
               (s3.PREFIX_PROCESADOS + 'dataset_features_latam.csv', 'data/processed/dataset_features_latam.csv'),
               (s3.PREFIX_CRUDOS     + 'departamentos_coordenadas.csv', 'data/raw/departamentos_coordenadas.csv'),
               (s3.PREFIX_MODELOS    + 'data_version.json', 'data/models/data_version.json'),
+              # Métricas del modelo en producción: referencia para el control de calidad
+              (s3.PREFIX_MODELOS    + 'metrics.json', 'data/models/metrics_vigente.json'),
           ]
           for key, local in archivos:
               try:
                   s3.download(key, local)
-                  print(f'Descargado: {key} -> {local}')
               except Exception as e:
-                  print(f'Advertencia: no se pudo descargar {key}: {e}')
-          "
+                  print(f'Aviso: no se pudo descargar {key}: {e}')
+          EOF
 
       - name: Verificar nueva versión OpenDengue + drift climático
         id: check
         env:
-          GITHUB_TOKEN:          ${{ secrets.GITHUB_TOKEN }}
-          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION:    us-east-2
-          S3_BUCKET:             ${{ secrets.S3_BUCKET }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -o pipefail
           python scripts/pipeline/verificar_actualizacion.py 2>&1 | tee check_output.txt
-          # Detectar si hay nueva versión para decidir si reentrenar
           if grep -q "Nueva versión detectada" check_output.txt; then
             echo "nueva_version=true" >> $GITHUB_OUTPUT
           else
             echo "nueva_version=false" >> $GITHUB_OUTPUT
           fi
-          # Detectar drift alto
           if grep -q "ALERTA" check_output.txt; then
             echo "drift_alto=true" >> $GITHUB_OUTPUT
           else
             echo "drift_alto=false" >> $GITHUB_OUTPUT
           fi
+          if grep -q "Nueva versión detectada" check_output.txt || [ "${{ inputs.forzar_reentrenamiento }}" == "true" ]; then
+            echo "reentrenar=true" >> $GITHUB_OUTPUT
+          else
+            echo "reentrenar=false" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Reentrenar modelos (solo si hay nueva versión)
+      - name: Preprocesar dataset nuevo (Agente 2, en borrador)
         if: steps.check.outputs.nueva_version == 'true'
         env:
-          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION:    us-east-2
-          S3_BUCKET:             ${{ secrets.S3_BUCKET }}
+          S3_SKIP_UPLOAD: "1"
+        run: python agents/agente_2_preprocesamiento.py
+
+      - name: Reentrenar modelos (Agentes 3, 4, 5, en borrador)
+        if: steps.check.outputs.reentrenar == 'true'
+        env:
+          S3_SKIP_UPLOAD: "1"   # nada se publica hasta pasar el control de calidad
         run: |
-          echo "Nueva versión de OpenDengue detectada — iniciando pipeline completo..."
-          python agents/agente_2_preprocesamiento.py
           python scripts/training/entrenar_modelos.py
           python scripts/pipeline/generar_scatter_data.py
+          python -c "import runpy; runpy.run_path('scripts/pipeline/verificar_actualizacion.py', run_name='lib')['actualizar_trained_at']()"
+
+      - name: Control de calidad (nuevo vs vigente)
+        id: qa
+        if: steps.check.outputs.reentrenar == 'true'
+        run: |
+          set +e
+          python scripts/pipeline/validar_modelo.py \
+            --vigente data/models/metrics_vigente.json \
+            --nuevo   data/models/metrics.json
+          echo "Código de salida: $?"
+
+      - name: Respaldar modelo vigente en el historial de S3
+        id: respaldo
+        if: steps.qa.outputs.aprobado == 'true'
+        run: |
+          TS=$(date -u +%Y%m%dT%H%MZ)
+          aws s3 sync "s3://$S3_BUCKET/modelos/"          "s3://$S3_BUCKET/historial/$TS/modelos/"
+          aws s3 sync "s3://$S3_BUCKET/datos_procesados/" "s3://$S3_BUCKET/historial/$TS/datos_procesados/"
+          echo "ts=$TS" >> $GITHUB_OUTPUT
+          echo "Respaldo del modelo anterior: s3://<bucket>/historial/$TS/" >> $GITHUB_STEP_SUMMARY
+
+      - name: Publicar modelo aprobado en S3
+        if: steps.qa.outputs.aprobado == 'true'
+        run: |
+          aws s3 sync data/models/ "s3://$S3_BUCKET/modelos/" --exclude "metrics_vigente.json"
+          if [ "${{ steps.check.outputs.nueva_version }}" == "true" ]; then
+            aws s3 cp data/processed/dataset_maestro_mensual_latam.csv "s3://$S3_BUCKET/datos_procesados/"
+            aws s3 cp data/processed/dataset_features_latam.csv        "s3://$S3_BUCKET/datos_procesados/"
+          fi
 
       - name: Subir drift_report y data_version a S3 (siempre)
-        env:
-          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION:    us-east-2
-          S3_BUCKET:             ${{ secrets.S3_BUCKET }}
+        if: steps.check.outcome == 'success'
         run: |
-          python -c "
-          import sys, os
-          sys.path.insert(0, 'agents')
-          import s3_client as s3
+          for f in drift_report.json data_version.json; do
+            [ -f "data/models/$f" ] && aws s3 cp "data/models/$f" "s3://$S3_BUCKET/modelos/$f" || echo "No existe $f"
+          done
 
-          for local, key in [
-              ('data/models/drift_report.json',  'drift_report.json'),
-              ('data/models/data_version.json',  'data_version.json'),
-          ]:
-              if os.path.exists(local):
-                  s3.upload(local, s3.PREFIX_MODELOS + key)
-                  print(f'Subido: {key}')
-              else:
-                  print(f'No existe localmente: {local}')
-          "
-
-      - name: Subir modelos a S3 y actualizar métricas (solo si hay nueva versión)
-        if: steps.check.outputs.nueva_version == 'true'
-        env:
-          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION:    us-east-2
-          S3_BUCKET:             ${{ secrets.S3_BUCKET }}
+      - name: Registrar en el repositorio (dispara el redespliegue en Railway)
+        if: steps.check.outcome == 'success'
         run: |
-          python -c "
-          import sys, os
-          sys.path.insert(0, 'agents')
-          import s3_client as s3
-          from datetime import datetime, timezone
-          import json
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898333+github-actions[bot]@users.noreply.github.com"
+          for f in data/models/drift_report.json data/models/data_version.json; do
+            [ -f "$f" ] && git add "$f"
+          done
+          if [ "${{ steps.qa.outputs.aprobado }}" == "true" ]; then
+            git add data/models
+            if [ "${{ steps.check.outputs.nueva_version }}" == "true" ]; then
+              git add data/processed/dataset_maestro_mensual_latam.csv data/processed/dataset_features_latam.csv
+            fi
+            MSG="mlops: publicar modelo reentrenado (R² ensamble $(python -c "import json;print(json.load(open('data/models/metrics.json'))['r2_ensemble'])"))"
+          else
+            MSG="mlops: verificación mensual (drift y versión de datos)"
+          fi
+          if git diff --cached --quiet; then
+            echo "Sin cambios que registrar."
+            exit 0
+          fi
+          git commit -m "$MSG"
+          git pull --rebase origin main
+          git push origin HEAD:main
 
-          # Nombres reales en S3 (verificados en consola AWS)
-          modelos = [
-              ('pipeline_ml.pkl',        'pipeline_ml.pkl'),
-              ('xgb_model.pkl',          'xgb_model.pkl'),
-              ('xgb_config.json',        'xgb_config.json'),
-              ('lstm_model.pth',         'lstm_model.pth'),
-              ('escalador_lstm.pkl',     'escalador_lstm.pkl'),
-              ('lstm_config.json',       'lstm_config.json'),
-              ('lstm_features.pkl',      'lstm_features.pkl'),
-              ('cols_feat.pkl',          'cols_feat.pkl'),
-              ('escalador_ml.pkl',       'escalador_ml.pkl'),
-              ('imputador_ml.pkl',       'imputador_ml.pkl'),
-              ('shap_importance.json',   'shap_importance.json'),
-              ('scatter_data.json',      'scatter_data.json'),
-              ('thresholds_clasificacion.json', 'thresholds_clasificacion.json'),
-          ]
-          for fname, key in modelos:
-              path = f'data/models/{fname}'
-              if os.path.exists(path):
-                  s3.upload(path, s3.PREFIX_MODELOS + key)
-                  print(f'Subido: {key}')
-
-          with open('data/models/metrics.json') as f:
-              m = json.load(f)
-          m['trained_at'] = datetime.now(timezone.utc).isoformat()
-          with open('data/models/metrics.json', 'w') as f:
-              json.dump(m, f, indent=2)
-          s3.upload('data/models/metrics.json', s3.PREFIX_MODELOS + 'metrics.json')
-          print('Artefactos de modelos subidos a S3.')
-          "
+      - name: Crear issue si el modelo reentrenado fue rechazado
+        if: steps.check.outputs.reentrenar == 'true' && steps.qa.outputs.aprobado != 'true'
+        uses: actions/github-script@v7
+        env:
+          MOTIVOS: ${{ steps.qa.outputs.motivos }}
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              title: 'Modelo reentrenado rechazado por el control de calidad',
+              body:  `El reentrenamiento terminó pero el modelo nuevo **no se publicó**; producción sigue con el modelo vigente.\n\nMotivos: ${process.env.MOTIVOS || 'ver el resumen del workflow'}\n\nRun: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              labels: ['model-monitoring']
+            })
 
       - name: Crear issue si hay drift alto sin nueva versión
         if: steps.check.outputs.drift_alto == 'true' && steps.check.outputs.nueva_version == 'false'
@@ -178,15 +196,26 @@ jobs:
       - name: Resumen del resultado
         if: always()
         run: |
-          echo "### Resultado de verificación" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ steps.check.outputs.nueva_version }}" == "true" ]; then
-            echo "✅ **Nueva versión OpenDengue detectada** — modelos reentrenados y subidos a S3" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "ℹ️ **Sin nueva versión de OpenDengue** — modelos actuales vigentes" >> $GITHUB_STEP_SUMMARY
-          fi
-          if [ "${{ steps.check.outputs.drift_alto }}" == "true" ]; then
-            echo "⚠️ **Drift climático alto** — ver drift_report.json" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "✅ **Features climáticas estables**" >> $GITHUB_STEP_SUMMARY
-          fi
+          {
+            echo "### Resultado del ciclo MLOps"
+            echo ""
+            if [ "${{ steps.check.outputs.nueva_version }}" == "true" ]; then
+              echo "🆕 Nueva versión de OpenDengue detectada"
+            else
+              echo "ℹ️ Sin nueva versión de OpenDengue"
+            fi
+            if [ "${{ steps.check.outputs.reentrenar }}" == "true" ]; then
+              if [ "${{ steps.qa.outputs.aprobado }}" == "true" ]; then
+                echo "✅ Modelo reentrenado **aprobado y publicado** (respaldo anterior: historial/${{ steps.respaldo.outputs.ts }})"
+              else
+                echo "❌ Modelo reentrenado **rechazado** — producción mantiene el modelo vigente"
+              fi
+            else
+              echo "⏭️ Sin reentrenamiento en esta ejecución"
+            fi
+            if [ "${{ steps.check.outputs.drift_alto }}" == "true" ]; then
+              echo "⚠️ Drift climático alto — ver drift_report.json"
+            else
+              echo "✅ Features climáticas estables"
+            fi
+          } >> $GITHUB_STEP_SUMMARY

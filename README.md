@@ -104,13 +104,15 @@ Fuentes externas
         v
   Backend FastAPI (Railway) <---> Frontend React 19 / Vite (Vercel)
 
-  +----- FASE 10: Monitoreo y Mantenimiento (GitHub Actions) -----+
-  |  verificar_actualizacion.py — cron 1ro de cada mes            |
-  |  1. Detecta nueva version OpenDengue (SHA GitHub)             |
-  |  2. Drift PSI sobre features climaticas (NASA POWER)          |
-  |  3. Reentrenamiento automatico si hay nueva version           |
-  |  4. Sube drift_report.json + data_version.json a S3           |
-  +---------------------------------------------------------------+
+  +----- FASE 10: Ciclo MLOps (GitHub Actions, 1ro de cada mes) -------+
+  |  1. Detecta nueva version OpenDengue (SHA GitHub)                  |
+  |  2. Drift PSI sobre features climaticas (NASA POWER)               |
+  |  3. Si hay datos nuevos: reentrena en borrador (sin tocar S3)      |
+  |  4. Control de calidad: R2 / Kappa nuevo vs. modelo vigente        |
+  |  5. Aprobado: respalda el vigente en historial/ y publica en S3    |
+  |     Rechazado: mantiene el vigente y abre un GitHub Issue          |
+  |  6. Registra metricas y version en git -> redespliegue en Railway  |
+  +--------------------------------------------------------------------+
 ```
 
 ---
@@ -256,7 +258,7 @@ Las 10 fases estan documentadas explicitamente en el codigo fuente de los Agente
 | 6b — Reentrenamiento | Con mejores hiperparametros (`refit=True`) | Agentes 3 y 4 |
 | 7b — Evaluacion final | R², MAE, RMSE + ensamble con pesos fijos 0.5/0.5 | Agentes 3 y 4 |
 | 9 — Despliegue | Serializacion S3, FastAPI Railway, React Vercel | `s3_client.py`, `backend/`, `frontend/` |
-| **10 — Mantenimiento** | **Drift PSI + version check + reentrenamiento auto** | `verificar_actualizacion.py` + GitHub Actions |
+| **10 — Mantenimiento** | **Drift PSI + version check + reentrenamiento + control de calidad + publicacion y rollback** | `verificar_actualizacion.py`, `validar_modelo.py` + GitHub Actions |
 
 ### Fase 10: Monitoreo y Mantenimiento automatizado
 
@@ -278,8 +280,26 @@ Guarda `drift_report.json` con PSI por feature y bandera `alerta_drift`. Si hay 
 
 > **Nota sobre drift de concepto:** El drift de covariables (features climaticas) es detectable en tiempo casi-real via NASA POWER. El drift de concepto (cambio en la relacion features->incidencia) requiere datos etiquetados de OpenDengue, que se publican con 6–12 meses de latencia — se evalua al momento del reentrenamiento con nueva version del dataset.
 
-**10c — Reentrenamiento automatico:**
-Si hay nueva version: descarga dataset, ejecuta pipeline completo (Agentes 2, 3, 4), sube modelos actualizados a S3.
+Si no existe `data_version.json` (bucket nuevo o primera ejecucion), la version actual se registra como **linea base** y no se reentrena: se asume que los modelos vigentes corresponden a esos datos.
+
+**10c — Reentrenamiento automatico (en borrador):**
+Si hay nueva version, descarga el dataset y ejecuta el pipeline completo (Agentes 2, 3, 4 y 5) con `S3_SKIP_UPLOAD=1`: los artefactos se generan solo en el runner y **nada llega a produccion todavia**. Tambien se puede forzar desde *Actions → Run workflow → forzar_reentrenamiento* (reentrena con el dataset de features vigente).
+
+**10d — Control de calidad** (`scripts/pipeline/validar_modelo.py`):
+Compara el `metrics.json` nuevo con el del modelo en produccion. El modelo se publica solo si:
+
+| Criterio | Umbral por defecto |
+|---|---|
+| R² ensamble (minimo absoluto) | >= 0.85 |
+| R² ensamble vs. vigente | no empeora mas de 0.02 |
+| Kappa de clasificacion vs. vigente | no empeora mas de 0.05 |
+
+Se usa tolerancia y no mejora estricta porque, con datos nuevos, el set de prueba cambia (split dinamico). Los umbrales se ajustan con `QA_MIN_R2`, `QA_TOL_R2` y `QA_TOL_KAPPA`.
+
+**10e — Publicacion, registro y rollback:**
+- **Aprobado:** copia el modelo vigente a `s3://<bucket>/historial/<fecha>/`, publica el nuevo en `modelos/` y hace commit de `data/models/` en el repo (`mlops: publicar modelo reentrenado ...`). El push dispara el redespliegue en Railway, que descarga el modelo nuevo al arrancar. El historial de git queda como registro de que modelo se publico, cuando y con que metricas.
+- **Rechazado:** produccion sigue con el modelo vigente y se abre un GitHub Issue con los motivos.
+- **Rollback:** copiar `historial/<fecha>/modelos/` de vuelta a `modelos/` (o revertir el commit) y redesplegar. Con *Bucket Versioning* activado en S3, ademas cada objeto conserva sus versiones anteriores.
 
 **Ejemplo de reporte drift (Junio 2026):**
 ```json
@@ -358,11 +378,12 @@ Si hay nueva version: descarga dataset, ejecuta pipeline completo (Agentes 2, 3,
 │   ├── training/entrenar_modelos.py     # Re-entrena ambos modelos desde cero
 │   └── pipeline/
 │       ├── verificar_actualizacion.py   # FASE 10: drift + version check + reentrenamiento
+│       ├── validar_modelo.py            # FASE 10d: control de calidad antes de publicar
 │       └── generar_scatter_data.py      # Genera scatter_data.json para el frontend
 ├── .github/
 │   └── workflows/
 │       ├── ci.yml                       # Tests (pytest) en cada push
-│       ├── retrain.yml                  # Cron mensual: drift + reentrenamiento -> S3
+│       ├── retrain.yml                  # Cron mensual: ciclo MLOps completo (ver Fase 10)
 │       └── subir-datos-s3.yml           # Manual: sincroniza data/ del repo con S3
 ├── Dockerfile                           # python:3.11-slim (incluye data/)
 ├── Procfile                             # python -m backend.main (lee PORT del entorno)
@@ -406,17 +427,18 @@ s3://<S3_BUCKET>/
 ├── datos_procesados/
 │   ├── dataset_maestro_mensual_latam.csv
 │   └── dataset_features_latam.csv       # 16,224 x 81 (73 features + meta)
-└── modelos/
-    ├── pipeline_ml.pkl                  # Pipeline XGBoost completo
-    ├── xgb_model.pkl / xgb_config.json
-    ├── escalador_ml.pkl / imputador_ml.pkl / cols_feat.pkl
-    ├── shap_importance.json             # Importancias TreeSHAP globales
-    ├── lstm_model.pth                   # LSTM (hidden=77, layers=3)
-    ├── lstm_config.json / lstm_features.pkl / escalador_lstm.pkl
-    ├── scatter_data.json                # 4,056 puntos test para scatter plot
-    ├── metrics.json                     # R², MAE, RMSE, pesos, clasificacion
-    ├── data_version.json                # SHA OpenDengue vigente + fecha
-    └── drift_report.json                # PSI por feature + alerta_drift
+├── modelos/
+│   ├── pipeline_ml.pkl                  # Pipeline XGBoost completo
+│   ├── xgb_model.pkl / xgb_config.json
+│   ├── escalador_ml.pkl / imputador_ml.pkl / cols_feat.pkl
+│   ├── shap_importance.json             # Importancias TreeSHAP globales
+│   ├── lstm_model.pth                   # LSTM (hidden=77, layers=3)
+│   ├── lstm_config.json / lstm_features.pkl / escalador_lstm.pkl
+│   ├── scatter_data.json                # 4,056 puntos test para scatter plot
+│   ├── metrics.json                     # R², MAE, RMSE, pesos, clasificacion
+│   ├── data_version.json                # SHA OpenDengue vigente + fecha
+│   └── drift_report.json                # PSI por feature + alerta_drift
+└── historial/<fecha>/                   # Respaldo del modelo anterior en cada publicacion (rollback)
 ```
 
 ---
