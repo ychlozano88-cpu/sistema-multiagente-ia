@@ -506,3 +506,8 @@ html.dark .leaflet-control-attribution a {
 .animate-fade-in {
   animation: fadeIn 0.2s ease-out forwards;
 }
+
+/* Mapa base OpenStreetMap en modo oscuro (CARTO ahora exige API key) */
+.map-tiles-dark {
+  filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+}
