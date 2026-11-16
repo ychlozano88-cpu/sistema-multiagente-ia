@@ -265,7 +265,7 @@ Las 10 fases estan documentadas explicitamente en el codigo fuente de los Agente
 Ejecutado automaticamente el **1ro de cada mes** via GitHub Actions (`.github/workflows/retrain.yml`):
 
 **10a — Deteccion de nueva version de datos:**
-Consulta el SHA del ultimo commit en `data/releases/` del repositorio OpenDengue via GitHub API. Si difiere del guardado en `data_version.json`, hay nuevos datos disponibles.
+Lista las versiones publicadas en `data/releases/` del repositorio OpenDengue (GitHub API) y compara la mas reciente (ej. `V1.3.1`) con la version usada para entrenar los modelos vigentes (`version_dataset` en `data_version.json`). La comparacion es numerica por version, no por commit, asi que cambios menores en el repositorio de OpenDengue (documentacion, citas) no disparan reentrenamientos. El Agente 1 descarga siempre la version mas reciente que encuentre.
 
 **10b — Drift de covariables (PSI — Population Stability Index):**
 Descarga datos climaticos recientes de NASA POWER (ultimos 2 anos disponibles) y calcula el PSI para cada feature climatica vs. la distribucion del set de entrenamiento.
@@ -436,7 +436,7 @@ s3://<S3_BUCKET>/
 │   ├── lstm_config.json / lstm_features.pkl / escalador_lstm.pkl
 │   ├── scatter_data.json                # 4,056 puntos test para scatter plot
 │   ├── metrics.json                     # R², MAE, RMSE, pesos, clasificacion
-│   ├── data_version.json                # SHA OpenDengue vigente + fecha
+│   ├── data_version.json                # Version OpenDengue usada (ej. V1.3.1) + commit + fecha
 │   └── drift_report.json                # PSI por feature + alerta_drift
 └── historial/<fecha>/                   # Respaldo del modelo anterior en cada publicacion (rollback)
 ```

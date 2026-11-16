@@ -322,57 +322,101 @@ class AgenteRecoleccion:
         print(f"SUCCESS: [Agente 1] Agua JMP guardada en '{self.agua_jmp_path}' ({len(df_agua)} registros).")
         return df_agua
 
-    # ZIPs de OpenDengue en GitHub (versiones en orden descendente)
-    # El archivo global está en data/releases/VX.X/ como ZIP que contiene el CSV
+    # Respaldo si la API de GitHub no responde (versiones en orden descendente).
+    # En condiciones normales las versiones se descubren dinámicamente con listar_releases_opendengue().
     OPENDENGUE_RELEASES = [
+        ("V1.3.1", "https://github.com/OpenDengue/master-repo/raw/main/data/releases/V1.3.1/Temporal_extract_V1_3_1.zip"),
         ("V1.3", "https://github.com/OpenDengue/master-repo/raw/main/data/releases/V1.3/Temporal_extract_V1_3.zip"),
         ("V1.2.2", "https://github.com/OpenDengue/master-repo/raw/main/data/releases/V1.2.2/Temporal_extract_V1_2_2.zip"),
         ("V1.1", "https://github.com/OpenDengue/master-repo/raw/main/data/releases/V1.1/Temporal_extract_V1_1.csv"),
         ("V1.0", "https://github.com/OpenDengue/master-repo/raw/main/data/releases/V1.0/Temporal_extract_V1_0.csv"),
     ]
+    OPENDENGUE_API = "https://api.github.com/repos/OpenDengue/master-repo/contents/data/releases"
+    OPENDENGUE_RAW = "https://github.com/OpenDengue/master-repo/raw/main/data/releases"
+
+    @staticmethod
+    def version_a_tupla(version):
+        """'V1.3.1' -> (1, 3, 1). Versiones no reconocibles -> ()."""
+        import re
+        m = re.fullmatch(r"[vV](\d+(?:\.\d+)*)", (version or "").strip())
+        return tuple(int(x) for x in m.group(1).split(".")) if m else ()
+
+    @classmethod
+    def listar_releases_opendengue(cls):
+        """
+        Descubre las versiones publicadas en data/releases/ de OpenDengue (GitHub API)
+        y devuelve [(version, [urls candidatas])] en orden descendente.
+        Si la API falla, usa la lista de respaldo OPENDENGUE_RELEASES.
+        """
+        headers = {"Accept": "application/vnd.github+json"}
+        token = os.environ.get("GITHUB_TOKEN")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        try:
+            r = requests.get(cls.OPENDENGUE_API, headers=headers, timeout=30)
+            r.raise_for_status()
+            versiones = [it["name"] for it in r.json()
+                         if it.get("type") == "dir" and cls.version_a_tupla(it.get("name"))]
+            versiones.sort(key=cls.version_a_tupla, reverse=True)
+            if versiones:
+                out = []
+                for v in versiones:
+                    base = f"{cls.OPENDENGUE_RAW}/{v}/Temporal_extract_{v.replace('.', '_')}"
+                    out.append((v, [base + ".zip", base + ".csv"]))
+                return out
+        except Exception as e:
+            print(f"   [OpenDengue] No se pudo listar versiones vía API ({e}); usando lista de respaldo.")
+        return [(v, [u]) for v, u in cls.OPENDENGUE_RELEASES]
+
+    @classmethod
+    def ultima_version_opendengue(cls):
+        releases = cls.listar_releases_opendengue()
+        return releases[0][0] if releases else None
 
     def _descargar_opendengue(self):
         """
-        Descarga el dataset de OpenDengue desde GitHub.
+        Descarga la versión más reciente de OpenDengue desde GitHub y devuelve su nombre (ej. 'V1.3.1').
         Las versiones >= V1.2 están en ZIP — se extraen automáticamente.
-        Nota: OpenDengue no tiene API REST — publica versiones anuales en GitHub
+        Nota: OpenDengue no tiene API REST de datos — publica versiones en GitHub
         con latencia de 6-12 meses respecto a los datos oficiales de cada país.
         """
         import zipfile, io
         os.makedirs(os.path.dirname(self.dengue_path), exist_ok=True)
 
-        for version, url in self.OPENDENGUE_RELEASES:
-            print(f"   [OpenDengue] Intentando {version} desde GitHub...")
-            try:
-                r = requests.get(url, timeout=300, stream=True)
-                if r.status_code != 200:
-                    print(f"   [OpenDengue] HTTP {r.status_code} — probando versión anterior...")
-                    continue
+        for version, urls in self.listar_releases_opendengue():
+            for url in urls:
+                print(f"   [OpenDengue] Intentando {version}: {url.rsplit('/', 1)[-1]}")
+                try:
+                    r = requests.get(url, timeout=300, stream=True)
+                    if r.status_code != 200:
+                        print(f"   [OpenDengue] HTTP {r.status_code}")
+                        continue
 
-                contenido = b""
-                for chunk in r.iter_content(chunk_size=1024 * 512):
-                    contenido += chunk
-                mb = len(contenido) / 1_048_576
-                print(f"   [OpenDengue] {mb:.1f} MB descargados")
+                    contenido = b""
+                    for chunk in r.iter_content(chunk_size=1024 * 512):
+                        contenido += chunk
+                    mb = len(contenido) / 1_048_576
+                    print(f"   [OpenDengue] {mb:.1f} MB descargados")
 
-                if url.endswith(".zip"):
-                    print(f"   [OpenDengue] Extrayendo ZIP...")
-                    with zipfile.ZipFile(io.BytesIO(contenido)) as zf:
-                        csvs = [n for n in zf.namelist() if n.endswith(".csv")]
-                        if not csvs:
-                            print(f"   [OpenDengue] ZIP sin CSV — probando siguiente...")
-                            continue
-                        with zf.open(csvs[0]) as src, open(self.dengue_path, "wb") as dst:
-                            dst.write(src.read())
-                else:
-                    with open(self.dengue_path, "wb") as f:
-                        f.write(contenido)
+                    if url.endswith(".zip"):
+                        print(f"   [OpenDengue] Extrayendo ZIP...")
+                        with zipfile.ZipFile(io.BytesIO(contenido)) as zf:
+                            csvs = [n for n in zf.namelist() if n.endswith(".csv")]
+                            if not csvs:
+                                print(f"   [OpenDengue] ZIP sin CSV — probando siguiente...")
+                                continue
+                            with zf.open(csvs[0]) as src, open(self.dengue_path, "wb") as dst:
+                                dst.write(src.read())
+                    else:
+                        with open(self.dengue_path, "wb") as f:
+                            f.write(contenido)
 
-                print(f"   [OpenDengue] OK — {version} guardado en {self.dengue_path}")
-                return
+                    self.version_opendengue = version
+                    print(f"   [OpenDengue] OK — {version} guardado en {self.dengue_path}")
+                    return version
 
-            except Exception as e:
-                print(f"   [OpenDengue] Error en {version}: {e} — probando siguiente...")
+                except Exception as e:
+                    print(f"   [OpenDengue] Error en {version}: {e} — probando siguiente...")
 
         raise RuntimeError(
             "No se pudo descargar OpenDengue automáticamente.\n"

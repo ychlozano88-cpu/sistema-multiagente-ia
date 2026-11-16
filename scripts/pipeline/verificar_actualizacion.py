@@ -94,9 +94,29 @@ def sha_local():
         return json.load(f).get("sha_github")
 
 
-def guardar_version(sha, fecha_github, sha_archivo):
+def version_local():
+    """Versión de OpenDengue con la que se entrenaron los modelos vigentes (ej. 'V1.3')."""
+    import re
+    if os.path.exists(VERSION_FILE):
+        with open(VERSION_FILE) as f:
+            v = json.load(f).get("version_dataset")
+        if v:
+            return v
+    # Registros antiguos sin version_dataset: se infiere de metrics.json ("... (OpenDengue V1.3)")
+    for path in (METRICS_FILE, os.path.join(os.path.dirname(METRICS_FILE), "metrics_vigente.json")):
+        if os.path.exists(path):
+            with open(path) as f:
+                texto = str(json.load(f).get("data_fecha", ""))
+            m = re.search(r"V\d+(?:\.\d+)*", texto)
+            if m:
+                return m.group(0)
+    return None
+
+
+def guardar_version(sha, fecha_github, sha_archivo, version_dataset=None):
     os.makedirs(os.path.dirname(VERSION_FILE), exist_ok=True)
     data = {
+        "version_dataset": version_dataset or version_local(),
         "sha_github":     sha,
         "fecha_github":   fecha_github,
         "sha_archivo_md5": sha_archivo,
@@ -116,23 +136,31 @@ def md5_archivo(path):
 
 
 def hay_nueva_version():
+    """
+    Compara la última versión publicada de OpenDengue (data/releases/VX.Y.Z) con la versión
+    usada para entrenar los modelos vigentes. Devuelve (nueva, sha_remoto, fecha, version_remota).
+    """
+    from agente_1_recoleccion import AgenteRecoleccion
     sha_remoto, fecha = obtener_sha_github()
-    if sha_remoto is None:
-        print("   [Versión] No se pudo consultar GitHub — asumiendo sin cambios.")
-        return False, None, None
-    sha_guardado = sha_local()
-    print(f"   [Versión] SHA remoto : {sha_remoto}  ({fecha})")
-    print(f"   [Versión] SHA guardado: {sha_guardado or 'ninguno'}")
-    if sha_guardado is None:
-        # Sin registro previo (bucket nuevo o primera ejecución): los modelos vigentes se
-        # consideran entrenados con la versión actual. Se registra como línea base en vez
-        # de disparar un reentrenamiento falso.
+    version_remota = AgenteRecoleccion.ultima_version_opendengue()
+    version_actual = version_local()
+    print(f"   [Versión] Última publicada : {version_remota or 'desconocida'}  (commit {sha_remoto}, {fecha})")
+    print(f"   [Versión] Usada en modelos : {version_actual or 'ninguna registrada'}")
+
+    if version_remota is None:
+        print("   [Versión] No se pudo consultar OpenDengue — asumiendo sin cambios.")
+        return False, sha_remoto, fecha, None
+    if version_actual is None:
+        # Sin registro previo: se toma la versión publicada como línea base en vez de
+        # disparar un reentrenamiento falso.
         md5 = md5_archivo(DENGUE_LOCAL) if os.path.exists(DENGUE_LOCAL) else None
-        guardar_version(sha_remoto, fecha, md5)
+        guardar_version(sha_remoto, fecha, md5, version_remota)
         print("   [Versión] Línea base registrada — sin reentrenamiento en esta ejecución.")
-        return False, sha_remoto, fecha
-    nueva = sha_remoto != sha_guardado
-    return nueva, sha_remoto, fecha
+        return False, sha_remoto, fecha, version_remota
+
+    tupla = AgenteRecoleccion.version_a_tupla
+    nueva = tupla(version_remota) > tupla(version_actual)
+    return nueva, sha_remoto, fecha, version_remota
 
 
 # ────────────────────────────────────────────────
@@ -315,9 +343,11 @@ def actualizar_trained_at():
     if os.path.exists(VERSION_FILE):
         with open(VERSION_FILE) as f:
             version_info = json.load(f)
+    version_ds = version_info.get("version_dataset") or "desconocida"
     m["trained_at"]      = datetime.now(timezone.utc).isoformat()
     m["data_sha_github"] = version_info.get("sha_github", "desconocido")
-    m["data_fecha"]      = version_info.get("fecha_github", "desconocida")
+    m["data_version_opendengue"] = version_ds
+    m["data_fecha"]      = f"{version_info.get('fecha_github', 'desconocida')} (OpenDengue {version_ds})"
     with open(METRICS_FILE, "w") as f:
         json.dump(m, f, indent=2)
     print(f"   [Métricas] trained_at y data_version actualizados en metrics.json")
@@ -337,18 +367,18 @@ def main():
 
     if not args.drift_only:
         print("\n[1/2] Verificando versión del dataset OpenDengue en GitHub...")
-        nueva, sha_remoto, fecha_github = hay_nueva_version()
+        nueva, sha_remoto, fecha_github, version_remota = hay_nueva_version()
 
         if nueva:
-            print(f"\n   *** Nueva versión detectada ({sha_remoto}) ***")
+            print(f"\n   *** Nueva versión detectada ({version_remota}) ***")
             print("   Descargando dataset actualizado...")
             from agente_1_recoleccion import AgenteRecoleccion
             a = AgenteRecoleccion(base_dir=ROOT)
             if os.path.exists(DENGUE_LOCAL):
                 os.remove(DENGUE_LOCAL)
-            a._descargar_opendengue()
+            version_descargada = a._descargar_opendengue()
             sha_md5 = md5_archivo(DENGUE_LOCAL)
-            guardar_version(sha_remoto, fecha_github, sha_md5)
+            guardar_version(sha_remoto, fecha_github, sha_md5, version_descargada)
             reentrenar = True
         else:
             print("   Dataset OpenDengue sin cambios desde la última verificación.")
