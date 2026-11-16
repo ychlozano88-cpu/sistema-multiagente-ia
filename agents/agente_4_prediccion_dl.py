@@ -233,12 +233,14 @@ class AgentePrediccionDL:
         # ── Fase 8: Bayesian Optimization (Optuna TPE) + folds cronologicos ──
         N_TRIALS_LSTM  = 20
         anos_unicos_train = sorted(set(anos_train.tolist()))
-        fold_val_anos  = anos_unicos_train[-5:]
+        # Cada fold necesita al menos un año previo para entrenar: el primer año con
+        # secuencias no puede ser año de validación (su set de entrenamiento quedaría vacío).
+        fold_val_anos  = anos_unicos_train[1:][-5:]
         folds = [
             (anos_train < val_ano, anos_train == val_ano)
             for val_ano in fold_val_anos
         ]
-        print(f"\n   [Fase 8] Optuna TPE — {N_TRIALS_LSTM} trials x K=5 folds cronologicos...")
+        print(f"\n   [Fase 8] Optuna TPE — {N_TRIALS_LSTM} trials x K={len(folds)} folds cronologicos...")
         print(f"   Folds val: {fold_val_anos}")
 
         def objective_lstm(trial):
@@ -248,7 +250,7 @@ class AgentePrediccionDL:
             dropout    = trial.suggest_float("dropout", 0.0, 0.4)
             r2s = []
             for tr_mask, val_mask in folds:
-                if val_mask.sum() == 0:
+                if val_mask.sum() == 0 or tr_mask.sum() == 0:
                     continue
                 X_tr = X_train[tr_mask]; y_tr = y_train_log[tr_mask]
                 X_vl = X_train[val_mask]; y_vl = y_train[val_mask]
