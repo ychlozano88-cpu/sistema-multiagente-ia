@@ -1,6 +1,3 @@
-# Datos — descargados desde S3 en runtime
-data/
-
 # Frontend — desplegado en Vercel
 frontend/
 
