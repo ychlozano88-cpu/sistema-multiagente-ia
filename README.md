@@ -299,9 +299,11 @@ Compara el `metrics.json` nuevo con el del modelo en produccion. El modelo se pu
 
 Se usa tolerancia y no mejora estricta porque, con datos nuevos, el set de prueba cambia (split dinamico). Los umbrales se ajustan con `QA_MIN_R2`, `QA_TOL_R2` y `QA_TOL_KAPPA`.
 
+**Primera ejecucion real (16-nov-2026):** el ciclo detecto OpenDengue `V1.3.1`, reentreno y el control de calidad **rechazo** el modelo (R² ensamble 0.8888 vs 0.9147 vigente), por lo que produccion mantuvo el modelo anterior. Con los mismos datos, el codigo actual del repositorio reproduce un XGBoost de R² ≈ 0.90 frente al 0.915 del modelo en produccion: la diferencia proviene de la configuracion de entrenamiento original (notebook de Colab no incluido), no de los datos. V1.3.1 no cambia ningun registro de los 8 paises en 2014–2022.
+
 **10e — Publicacion, registro y rollback:**
 - **Aprobado:** copia el modelo vigente a `s3://<bucket>/historial/<fecha>/`, publica el nuevo en `modelos/` y hace commit de `data/models/` en el repo (`mlops: publicar modelo reentrenado ...`). El push dispara el redespliegue en Railway, que descarga el modelo nuevo al arrancar. El historial de git queda como registro de que modelo se publico, cuando y con que metricas.
-- **Rechazado:** produccion sigue con el modelo vigente y se abre un GitHub Issue con los motivos.
+- **Rechazado:** produccion sigue con el modelo vigente, se descartan los artefactos nuevos y se abre un GitHub Issue con los motivos. La version evaluada queda anotada como `version_rechazada` en `data_version.json` para no reentrenarla cada mes; se vuelve a intentar cuando OpenDengue publique una version posterior o si se fuerza desde *Run workflow*.
 - **Rollback:** copiar `historial/<fecha>/modelos/` de vuelta a `modelos/` (o revertir el commit) y redesplegar. Con *Bucket Versioning* activado en S3, ademas cada objeto conserva sus versiones anteriores.
 
 **Ejemplo de reporte drift (Junio 2026):**
@@ -439,7 +441,7 @@ s3://<S3_BUCKET>/
 │   ├── lstm_config.json / lstm_features.pkl / escalador_lstm.pkl
 │   ├── scatter_data.json                # 4,056 puntos test para scatter plot
 │   ├── metrics.json                     # R², MAE, RMSE, pesos, clasificacion
-│   ├── data_version.json                # Version OpenDengue usada (ej. V1.3.1) + commit + fecha
+│   ├── data_version.json                # Version OpenDengue en produccion, version rechazada, commit y fecha
 │   └── drift_report.json                # PSI por feature + alerta_drift
 └── historial/<fecha>/                   # Respaldo del modelo anterior en cada publicacion (rollback)
 ```

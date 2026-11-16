@@ -1,6 +1,10 @@
 {
+  "version_dataset": "V1.3",
+  "version_rechazada": "V1.3.1",
+  "rechazada_en": "2026-11-16T20:10:00+00:00",
+  "nota": "V1.3.1 evaluada el 2026-11-16: modelo reentrenado rechazado por el control de calidad (R2 ensamble 0.8888 vs 0.9147). Produccion mantiene el modelo entrenado con V1.3.",
   "sha_github": "99b6a3edd3cf",
   "fecha_github": "2026-11-03T15:19:38Z",
   "sha_archivo_md5": null,
-  "verificado_en": "2026-11-16T17:21:46.962884+00:00"
+  "verificado_en": "2026-11-16T20:10:00+00:00"
 }

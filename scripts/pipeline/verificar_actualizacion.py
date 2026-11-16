@@ -117,6 +117,7 @@ def guardar_version(sha, fecha_github, sha_archivo, version_dataset=None):
     os.makedirs(os.path.dirname(VERSION_FILE), exist_ok=True)
     data = {
         "version_dataset": version_dataset or version_local(),
+        "version_rechazada": version_rechazada(),
         "sha_github":     sha,
         "fecha_github":   fecha_github,
         "sha_archivo_md5": sha_archivo,
@@ -160,7 +161,19 @@ def hay_nueva_version():
 
     tupla = AgenteRecoleccion.version_a_tupla
     nueva = tupla(version_remota) > tupla(version_actual)
+    rechazada = version_rechazada()
+    if nueva and rechazada == version_remota:
+        print(f"   [Versión] {version_remota} ya fue evaluada y su modelo rechazado por el control de calidad "
+              f"— no se reentrena hasta que haya una versión más nueva (o se fuerce desde el workflow).")
+        nueva = False
     return nueva, sha_remoto, fecha, version_remota
+
+
+def version_rechazada():
+    if os.path.exists(VERSION_FILE):
+        with open(VERSION_FILE) as f:
+            return json.load(f).get("version_rechazada")
+    return None
 
 
 # ────────────────────────────────────────────────

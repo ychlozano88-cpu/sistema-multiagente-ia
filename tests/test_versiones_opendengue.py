@@ -59,3 +59,47 @@ def test_listar_releases_usa_respaldo_si_falla_la_api():
 def test_ultima_version():
     with mock.patch("agente_1_recoleccion.requests.get", return_value=_Resp(LISTADO)):
         assert A.ultima_version_opendengue() == "V1.10"
+
+
+# ── Detección de nueva versión (verificar_actualizacion.hay_nueva_version) ──
+
+import json
+import os
+import runpy
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _verificar(tmp_path, registro, ultima):
+    # runpy devuelve una copia del namespace: se parchea el de las funciones (__globals__)
+    g = runpy.run_path(os.path.join(_ROOT, "scripts", "pipeline", "verificar_actualizacion.py"),
+                       run_name="lib")["hay_nueva_version"].__globals__
+    vf = tmp_path / "data_version.json"
+    if registro is not None:
+        vf.write_text(json.dumps(registro))
+    g["VERSION_FILE"] = str(vf)
+    g["METRICS_FILE"] = str(tmp_path / "metrics.json")
+    g["obtener_sha_github"] = lambda: ("abc123", "2026-11-03")
+    with mock.patch.object(A, "ultima_version_opendengue", classmethod(lambda cls: ultima)):
+        return g["hay_nueva_version"](), vf
+
+
+def test_detecta_version_mas_nueva(tmp_path):
+    (nueva, *_), _ = _verificar(tmp_path, {"version_dataset": "V1.3"}, "V1.3.1")
+    assert nueva
+
+
+def test_no_reentrena_version_ya_rechazada(tmp_path):
+    (nueva, *_), _ = _verificar(tmp_path, {"version_dataset": "V1.3", "version_rechazada": "V1.3.1"}, "V1.3.1")
+    assert not nueva
+
+
+def test_reentrena_si_aparece_version_posterior_a_la_rechazada(tmp_path):
+    (nueva, *_), _ = _verificar(tmp_path, {"version_dataset": "V1.3", "version_rechazada": "V1.3.1"}, "V1.4")
+    assert nueva
+
+
+def test_sin_registro_establece_linea_base(tmp_path):
+    (nueva, *_), vf = _verificar(tmp_path, None, "V1.3.1")
+    assert not nueva
+    assert json.loads(vf.read_text())["version_dataset"] == "V1.3.1"
