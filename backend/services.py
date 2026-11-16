@@ -129,6 +129,14 @@ class PredictionService:
             )
         except Exception:
             print("[SMA-ML/DL] scatter_data.json no disponible en S3 (ejecuta generar_scatter_data.py para generarlo)")
+        # Reporte de drift (lo genera el workflow mensual de GitHub Actions); opcional
+        try:
+            _s3.download(
+                _s3.PREFIX_MODELOS + "drift_report.json",
+                os.path.join(self.model_dir, "drift_report.json")
+            )
+        except Exception:
+            print("[SMA-ML/DL] drift_report.json aun no existe en S3 (se crea en la primera verificacion mensual)")
 
     def inicializar_servicio(self):
         print("[SMA-ML/DL] Iniciando Sistema Multi-Agente...")

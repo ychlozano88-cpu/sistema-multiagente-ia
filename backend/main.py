@@ -11,6 +11,7 @@ import numpy as np
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict
+from contextlib import asynccontextmanager
 
 # Importar esquemas y servicios locales
 from backend.schemas import (
@@ -22,7 +23,21 @@ from backend.schemas import (
 )
 from backend.services import PredictionService
 
+# Servicio de predicción en memoria (RAM); se inicializa al arrancar la app
+prediction_service = None
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    global prediction_service
+    # Detectar el directorio base del proyecto
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    prediction_service = PredictionService(base_dir=base_dir)
+    yield
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="API del Sistema Multi-Agente SMA-ML/DL",
     description="Servicio Backend REST para predicción y análisis explicable de dengue en Latinoamérica.",
     version="1.0.0"
@@ -42,17 +57,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Inicializar servicio de predicción en memoria (RAM)
-# El servicio buscará de manera predeterminada el directorio base del proyecto
-prediction_service = None
-
-@app.on_event("startup")
-def startup_event():
-    global prediction_service
-    # Detectar el directorio base
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    prediction_service = PredictionService(base_dir=base_dir)
 
 @app.get("/", tags=["General"])
 def read_root():
